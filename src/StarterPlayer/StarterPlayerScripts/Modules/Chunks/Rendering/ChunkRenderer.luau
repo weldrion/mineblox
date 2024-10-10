@@ -6,28 +6,42 @@ local ChunkRenderer = {}
 
 local AssetService = game:GetService("AssetService")
 local Atlas = AssetService:CreateEditableImageAsync("rbxassetid://17400483416")
+
+local AtlasBuffer = Atlas:ReadPixelsBuffer(Vector2.zero, Atlas.Size)
+Atlas:Resize(Vector2.one * 1024)
+
+local Size = math.sqrt(buffer.len(AtlasBuffer)/4)
+local PixelSize = Atlas.Size.X / Size
+
+for x = 0, Size - 1 do
+	for y = 0, Size - 1 do
+		local Offset = (x + y * Size) * 4 
+		local R = buffer.readu8(AtlasBuffer, (x + y * Size) * 4) 
+		local G = buffer.readu8(AtlasBuffer, (x + y * Size) * 4 + 1) 
+		local B = buffer.readu8(AtlasBuffer, (x + y * Size) * 4 + 2)
+		local T = buffer.readu8(AtlasBuffer, (x + y * Size) * 4 + 3)
+
+		Atlas:DrawRectangle(Vector2.new(PixelSize * x, PixelSize * y), Vector2.one * PixelSize, Color3.fromRGB(R, G, B), T, Enum.ImageCombineType.Overwrite)
+	end
+end
+
 local ReplicatedStorage = game:GetService('ReplicatedStorage')
-local Players = game:GetService('Players')
+local StarterPlayer = game:GetService("StarterPlayer")
 
-local Player: Player = Players.LocalPlayer
-local PlayerScripts = Player.PlayerScripts
-
-local Modules = PlayerScripts:WaitForChild('Modules')
-
-local ChunksData = require(Modules.Chunks.Data.ChunksData)
-local BlockMeshData = require(Modules.Chunks.Rendering.Data.BlockMeshData)
-local PlantMeshData = require(Modules.Chunks.Rendering.Data.PlantMeshData)
-local AtlasTextureData = require(Modules.Chunks.Rendering.Data.AtlasTextureData)
+local ChunksData = require(StarterPlayer.StarterPlayerScripts.Modules.Chunks.Data.ChunksData)
+local BlockMeshData = require(StarterPlayer.StarterPlayerScripts.Modules.Chunks.Rendering.Data.BlockMeshData)
+local PlantMeshData = require(StarterPlayer.StarterPlayerScripts.Modules.Chunks.Rendering.Data.PlantMeshData)
+local AtlasTextureData = require(StarterPlayer.StarterPlayerScripts.Modules.Chunks.Rendering.Data.AtlasTextureData)
 local ChunkSettings = require(ReplicatedStorage.Shared.ChunkSettings)
 local ChunksUtil = require(ReplicatedStorage.Shared.ChunksUtil)
 local ItemsData = require(ReplicatedStorage.Shared.ItemsData)
 
-local CHUNK_SIZE: number = ChunkSettings['CHUNK_SIZE']
-local BLOCK_SIZE: number = ChunkSettings['BLOCK_SIZE']
+local CHUNK_SIZE = ChunkSettings['CHUNK_SIZE']
+local BLOCK_SIZE = ChunkSettings['BLOCK_SIZE']
 
-local AIR_ID: number = ItemsData['Air']['ID']
+local AIR_ID = ItemsData['Air']['ID']
 
-local ATLAS_SIZE: number = 8
+local ATLAS_SIZE = 8
 
 local faceOrder = {
 	{BlockMeshData.frontVertices, BlockMeshData.frontIndices},
@@ -50,32 +64,38 @@ local BLOCK_NEIGHBOUR_VECTORS =
 
 -- PRIVATE
 
-local function createFace(EditableMesh: EditableMesh, faceVertices, faceIndices, blockId, faceId, x, z, y)
+function createFace(EditableMesh: EditableMesh, faceVertices, faceIndices, blockId, faceId, x, z, y)
 	local vertices = {}
 	for _, vertexOffset in faceVertices do
 		local vertexPosition = Vector3.new(x + vertexOffset.X, y + vertexOffset.Y, z + vertexOffset.Z)
 		local vertexId = EditableMesh:AddVertex(vertexPosition)
 		table.insert(vertices, vertexId)
 	end
+	
+	local Triangles = {}
 	for i = 1, 4, 3 do
 		local vertexId0Position = faceIndices[i]
 		local vertexId1Position = faceIndices[i + 1]
 		local vertexId2Position = faceIndices[i + 2]
-		EditableMesh:AddTriangle(vertices[vertexId0Position], vertices[vertexId1Position], vertices[vertexId2Position])
+		table.insert(Triangles, EditableMesh:AddTriangle(vertices[vertexId0Position], vertices[vertexId1Position], vertices[vertexId2Position])) 
 	end
 
 	-- Find face's texture in atlas -> set vertice's UVs to texture's corner
 	local texturePosition = AtlasTextureData[blockId][faceId]
 	local x = texturePosition % ATLAS_SIZE - 1
 	local y = texturePosition // ATLAS_SIZE
-	EditableMesh:SetUV(vertices[1], Vector2.new(x / ATLAS_SIZE, y / ATLAS_SIZE)) -- Top left of image
-	EditableMesh:SetUV(vertices[2], Vector2.new((x + 1) / ATLAS_SIZE, y / ATLAS_SIZE)) -- Top right of image
-	EditableMesh:SetUV(vertices[3], Vector2.new(x / ATLAS_SIZE, (y + 1) / ATLAS_SIZE)) -- Bottom left of image 
-	EditableMesh:SetUV(vertices[4], Vector2.new((x + 1) / ATLAS_SIZE, (y + 1) / ATLAS_SIZE) ) --  Bottom right of image
+	
+	local RTuv = EditableMesh:AddUV(Vector2.new(x / ATLAS_SIZE, y / ATLAS_SIZE))
+	local LTuv = EditableMesh:AddUV(Vector2.new((x + 1) / ATLAS_SIZE, y / ATLAS_SIZE))
+	local LBuv = EditableMesh:AddUV(Vector2.new(x / ATLAS_SIZE, (y + 1) / ATLAS_SIZE))
+	local RBuv = EditableMesh:AddUV(Vector2.new((x + 1) / ATLAS_SIZE, (y + 1) / ATLAS_SIZE))
+	
+	EditableMesh:SetFaceUVs(Triangles[1], {LBuv, RBuv, LTuv}) -- LB RB RT
+	EditableMesh:SetFaceUVs(Triangles[2], {LTuv, RTuv, LBuv}) -- LB RB RT
 end
 
 
-local function getShouldSidesRender(chunkX: number, chunkZ: number, chunkY: number, x: number, z: number, y: number): {}
+function getShouldSidesRender(chunkX: number, chunkZ: number, chunkY: number, x: number, z: number, y: number): {}
 	local shouldSidesRender = {false, false, false, false, false, false}
 	local worldPosition = ChunksUtil.chunkToWorldPosition(chunkX, chunkZ, chunkY, x, z, y)
 	
@@ -146,6 +166,12 @@ function ChunkRenderer.renderChunk(chunkX: number, chunkZ: number, chunkY: numbe
 		end
 	end
 	
+	if #EditableMesh:GetVertices() == 0 then
+		EditableMesh:Destroy()
+		EditableImage:Destroy()
+		return
+	end
+	
 	EditableMesh.Parent = MeshPart
 	EditableImage.Parent = MeshPart
 	MeshPart.Position = Vector3.new(
@@ -158,9 +184,8 @@ end
 
 
 function ChunkRenderer.unrenderChunk(chunkX: number, chunkZ: number, chunkY: number): ()
-	local chunk = workspace:FindFirstChild(`{chunkX}x{chunkZ}x{chunkY}`)
-	if chunk then
-		chunk:Destroy()
+	if workspace:FindFirstChild(`{chunkX}x{chunkZ}x{chunkY}`) then
+		workspace:FindFirstChild(`{chunkX}x{chunkZ}x{chunkY}`):Destroy()
 	end
 end
 
